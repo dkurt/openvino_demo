@@ -1,8 +1,8 @@
+This is a demo application for Intel® OpenVINO™ toolkit.
+It demonstrates a pipeline with several [pre-trained deep learning models](https://software.intel.com/openvino-toolkit/documentation/pretrained-models)
+such face detection, emotions recognition and face reidentification networks.
 
-
-## Prerequisities
-
-## Usage
+## Build
 
 * Go to https://software.intel.com/openvino-toolkit to download and install a toolkit.
 
@@ -36,3 +36,11 @@ git clone https://github.com/dkurt/openvino_demo.git
   "C:\Program Files\CMake\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 14 Win64" ..
   "C:\Program Files\CMake\bin\cmake.exe" --build . --config Release
   ```
+
+## Usage
+* Prepare a gallery. This is a directory contains images of single persons. Base
+names of images are used to identify recognized persons.
+* Pass a path to gallery in command line parameters:
+```
+./demo -g=/path/to/gallery
+```
