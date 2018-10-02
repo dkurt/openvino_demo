@@ -3,6 +3,9 @@
 #include "runners.hpp"
 
 const char* kWinName = "Intel OpenVINO toolkit";
+int fdTarget = CPU;
+int erTarget = MYRIAD;
+int frTarget = CPU;
 
 const char* keys =
     "{ help    h | | Print help message. }"
@@ -19,17 +22,18 @@ protected:
 // This class runs a network which detects faces.
 class FaceDetector : public Algorithm {
 public:
-  FaceDetector() : Algorithm(new IERunner("face-detection-retail-0004")) {}
+  FaceDetector() : Algorithm(new IERunner("face-detection-retail-0004", fdTarget)) {}
 
   // Returns bounding boxes around predicted faces.
-  void detect(const cv::Mat& frame, std::vector<cv::Rect>& boxes, float confThr = 0.5) {
+  void detect(const cv::Mat& frame, std::vector<cv::Rect>& boxes, cv::TickMeter& tm,
+              float confThr = 0.7) {
     boxes.clear();
 
     cv::Mat detections;
     cv::Mat blob = cv::dnn::blobFromImage(frame, /*scale*/1.0, cv::Size(300, 300),
                                           /*mean*/cv::Scalar(), /*swapRB*/false,
                                           /*crop*/false);
-    runner->run(blob, detections);
+    runner->run(blob, detections, tm);
 
     // Output of SSD-based object detection network is a 4D blob with shape 1x1xNx7
     // where N is a number of detections and an every detection is a vector
@@ -57,15 +61,15 @@ public:
 
 class EmotionsRecognizer : public Algorithm {
 public:
-  EmotionsRecognizer() : Algorithm(new OCVRunner("emotions-recognition-retail-0003")) {}
+  EmotionsRecognizer() : Algorithm(new OCVRunner("emotions-recognition-retail-0003", erTarget)) {}
 
   // Returns a string with face's emotion.
-  std::string recognize(const cv::Mat& faceImg) {
+  std::string recognize(const cv::Mat& faceImg, cv::TickMeter& tm) {
     cv::Mat confidences;
     cv::Mat blob = cv::dnn::blobFromImage(faceImg, /*scale*/1.0, cv::Size(64, 64),
                                           /*mean*/cv::Scalar(), /*swapRB*/false,
                                           /*crop*/false);
-    runner->run(blob, confidences);
+    runner->run(blob, confidences, tm);
 
     // Emotions recognition network is a classification model which predicts
     // a vector of 5 confidences corresponding to face emotions: neutral, happy,
@@ -88,7 +92,8 @@ public:
 class FaceRecognition : public Algorithm {
 public:
   FaceRecognition(const std::string& gallery, FaceDetector& fd)
-      : Algorithm(new IERunner("face-reidentification-retail-0001")) {
+      : Algorithm(new IERunner("face-reidentification-retail-0001", frTarget)) {
+    cv::TickMeter tm;
     if (cv::utils::fs::isDirectory(gallery))
     {
       // Get all the images from gallery.
@@ -101,7 +106,7 @@ public:
 
         // Detect a face on image.
         std::vector<cv::Rect> boxes;
-        fd.detect(img, boxes);
+        fd.detect(img, boxes, tm);
 
         if (boxes.empty())
             CV_Error(cv::Error::StsAssert, "There is no face found on image " + imgName);
@@ -109,7 +114,7 @@ public:
             CV_Error(cv::Error::StsAssert, "More than one face found on image " + imgName);
 
         cv::Mat face = img(boxes[0]);
-        cv::Mat embedding = getEmbedding(face);
+        cv::Mat embedding = getEmbedding(face, tm);
         embeddings[personName] = embedding;
       }
     }
@@ -119,8 +124,8 @@ public:
   // Returns a name of person from gallery if matching score is higher than threshold value.
   // If no person found, returns 'unknown'.
   // Thresholding score is in range [-1, 1] where 1 means 100% matching.
-  std::string recognize(const cv::Mat& faceImg, float scoreThr = 0.5) {
-    cv::Mat embedding = getEmbedding(faceImg);
+  std::string recognize(const cv::Mat& faceImg, cv::TickMeter& tm, float scoreThr = 0.5) {
+    cv::Mat embedding = getEmbedding(faceImg, tm);
     std::string bestMatchName = "unknown";
     for (auto& it : embeddings) {
       float score = embedding.dot(it.second);
@@ -136,12 +141,12 @@ private:
   std::map<std::string, cv::Mat> embeddings;
 
   // Returns an embedding vector of 128 floating point values.
-  cv::Mat getEmbedding(const cv::Mat& faceImg) {
+  cv::Mat getEmbedding(const cv::Mat& faceImg, cv::TickMeter& tm) {
     cv::Mat embedding;
     cv::Mat blob = cv::dnn::blobFromImage(faceImg, /*scale*/1.0, cv::Size(128, 128),
                                           /*mean*/cv::Scalar(), /*swapRB*/false,
                                           /*crop*/false);
-    runner->run(blob, embedding);
+    runner->run(blob, embedding, tm);
 
     embedding = embedding.reshape(1, 1);  // Reshape from 1x1x128x1 to 1x128
     cv::normalize(embedding, embedding);  // Make a unit vector (L2 norm).
@@ -172,6 +177,14 @@ static void drawBox(cv::Mat& frame, const cv::Rect& box, int& thickness) {
     cv::line(frame, corner + shift, cv::Point(corner.x - size, corner.y) + shift, colors[i], thickness);
     cv::line(frame, corner + shift, cv::Point(corner.x, corner.y + size) + shift, colors[i], thickness);
   }
+}
+
+static const char* targetToStr(int target) {
+  if (target == CPU) return "CPU";
+  if (target == GPU_FP32) return "GPU, FP32";
+  if (target == GPU_FP16) return "GPU, FP16";
+  if (target == MYRIAD) return "VPU";
+  return "";
 }
 
 int main(int argc, char** argv) {
@@ -209,6 +222,8 @@ int main(int argc, char** argv) {
   cv::inRange(logo, cv::Scalar(), cv::Scalar(), logoMask);
   logoMask = ~logoMask;
 
+  cv::TickMeter timers[3];
+
   while (cv::waitKey(1) < 0) {
     // Capture a frame from a camera.
     cap >> frame;
@@ -216,14 +231,14 @@ int main(int argc, char** argv) {
       break;
 
     std::vector<cv::Rect> boxes;
-    fd.detect(frame, boxes);
+    fd.detect(frame, boxes, timers[0]);
 
     std::vector<std::string> emotions;
     std::vector<std::string> names;
     for (auto& box : boxes) {
       cv::Mat face = frame(box);
-      emotions.push_back(er.recognize(face));
-      names.push_back(fr.recognize(face));
+      emotions.push_back(er.recognize(face, timers[1]));
+      names.push_back(fr.recognize(face, timers[2]));
     }
 
     for (int i = 0; i < boxes.size(); ++i) {
@@ -247,6 +262,19 @@ int main(int argc, char** argv) {
 
     // Put logo image.
     logo.copyTo(frame(logoRoi), logoMask);
+
+    // Put efficiency information.
+    int targets[] = {fdTarget, erTarget, frTarget};
+    for (int i = 0; i < 3; ++i) {
+      const char* algo = i == 0 ? "DETECTION  " : (i == 1 ? "EMOTIONS   " : "RECOGNITION");
+      std::string label = cv::format("%s (%s): %.1f FPS", algo, targetToStr(targets[i]),
+                                     1.0 / timers[i].getTimeSec());
+
+      float fontScale = 0.001 * frame.cols;
+      int baseLine;
+      cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseLine);
+      cv::putText(frame, label, cv::Point(20, frame.rows - 1.5 * (3 - i) * labelSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
+    }
 
     cv::imshow(kWinName, frame);
   }

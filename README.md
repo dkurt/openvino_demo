@@ -38,6 +38,16 @@ git clone https://github.com/dkurt/openvino_demo.git
   ```
 
 ## Usage
+* Set OpenMP threads waiting policy to `PASSIVE`:
+  * Linux
+  ```
+  export OMP_WAIT_POLICY=PASSIVE
+  ```
+  * Windows
+  ```
+  set OMP_WAIT_POLICY=PASSIVE
+  ```
+
 * Prepare a gallery. This is a directory contains images of single persons. Base
 names of images are used to identify recognized persons.
 * Pass a path to gallery in command line parameters:
