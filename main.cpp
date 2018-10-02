@@ -149,6 +149,31 @@ private:
   }
 };
 
+static void drawBox(cv::Mat& frame, const cv::Rect& box, int& thickness) {
+  int size = std::min(box.width, box.height);
+  thickness = 0.05 * size;
+  size *= 0.35;
+  cv::Scalar colors[] = {cv::Scalar(0, 0, 0), cv::Scalar(217, 101, 23)};
+
+  for (int i = 0; i < 2; ++i)
+  {
+    cv::Point shift((1 - i) * 0.5 * thickness, (1 - i) * 0.5 * thickness);
+    cv::line(frame, box.tl() + shift, cv::Point(box.x + size, box.y) + shift, colors[i], thickness);
+    cv::line(frame, box.tl() + shift, cv::Point(box.x, box.y + size) + shift, colors[i], thickness);
+
+    cv::line(frame, box.br() + shift, cv::Point(box.x + box.width - size, box.y + box.height) + shift, colors[i], thickness);
+    cv::line(frame, box.br() + shift, cv::Point(box.x + box.width, box.y + box.height - size) + shift, colors[i], thickness);
+
+    cv::Point corner(box.x, box.y + box.height);
+    cv::line(frame, corner + shift, cv::Point(corner.x + size, corner.y) + shift, colors[i], thickness);
+    cv::line(frame, corner + shift, cv::Point(corner.x, corner.y - size) + shift, colors[i], thickness);
+
+    corner = cv::Point(box.x + box.width, box.y);
+    cv::line(frame, corner + shift, cv::Point(corner.x - size, corner.y) + shift, colors[i], thickness);
+    cv::line(frame, corner + shift, cv::Point(corner.x, corner.y + size) + shift, colors[i], thickness);
+  }
+}
+
 int main(int argc, char** argv) {
   // Parse command line arguments to get a path to gallery.
   cv::CommandLineParser parser(argc, argv, keys);
@@ -169,6 +194,20 @@ int main(int argc, char** argv) {
   FaceRecognition fr(gallery, fd);
 
   cv::namedWindow(kWinName, cv::WINDOW_NORMAL);
+
+  std::string logoPath = cv::utils::fs::join(getenv("INTEL_CVSDK_DIR"),
+                         cv::utils::fs::join("deployment_tools",
+                         cv::utils::fs::join("computer_vision_algorithms",
+                         cv::utils::fs::join("share",
+                         cv::utils::fs::join("cva",
+                         cv::utils::fs::join("FaceDetection",
+                         cv::utils::fs::join("doc",
+                         cv::utils::fs::join("html", "intellogo.png"))))))));
+  cv::Mat logo = cv::imread(logoPath);
+  cv::Rect logoRoi(0, 0, logo.cols, logo.rows);
+  cv::Mat logoMask;
+  cv::inRange(logo, cv::Scalar(), cv::Scalar(), logoMask);
+  logoMask = ~logoMask;
 
   while (cv::waitKey(1) < 0) {
     // Capture a frame from a camera.
@@ -191,23 +230,25 @@ int main(int argc, char** argv) {
       const cv::Rect& box = boxes[i];
 
       // Draw a bounding box around a face.
-      cv::rectangle(frame, box, cv::Scalar(0, 255, 0), 2);
+      int boxThickness;
+      drawBox(frame, box, boxThickness);
 
       // Draw a label.
       std::string label = names[i] + ", " + emotions[i];
 
-      int baseLine;
-      cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+      float fontScale = 0.005 * box.width;
 
-      int top = std::max(box.y, labelSize.height);
-      cv::rectangle(frame, cv::Point(box.x, top - labelSize.height),
-                    cv::Point(box.x + labelSize.width, top + baseLine),
-                    cv::Scalar::all(255), cv::FILLED);
-      cv::putText(frame, label, cv::Point(box.x, top), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar());
+      int baseLine;
+      cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseLine);
+
+      int top = std::max(box.y - boxThickness, labelSize.height);
+      cv::putText(frame, label, cv::Point(box.x, top), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
     }
+
+    // Put logo image.
+    logo.copyTo(frame(logoRoi), logoMask);
 
     cv::imshow(kWinName, frame);
   }
-
   return 0;
 }
