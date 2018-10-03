@@ -54,3 +54,6 @@ names of images are used to identify recognized persons.
 ```
 ./demo -g=/path/to/gallery
 ```
+
+* To register a person which is recognized as `unknown`, press an `Enter` key and
+type a name in new window. Press `Enter` again to save person's image in the gallery.

@@ -4,7 +4,7 @@
 
 const char* kWinName = "Intel OpenVINO toolkit";
 int fdTarget = CPU;
-int erTarget = MYRIAD;
+int erTarget = CPU;
 int frTarget = CPU;
 
 const char* keys =
@@ -137,6 +137,14 @@ public:
     return bestMatchName;
   }
 
+  void add(const std::string& name, const cv::Mat& faceImg, const cv::Mat& frame,
+           const std::string& gallery)
+  {
+    cv::TickMeter tm;
+    embeddings[name] = getEmbedding(faceImg, tm);
+    cv::imwrite(cv::utils::fs::join(gallery, name + ".png"), frame);
+  }
+
 private:
   std::map<std::string, cv::Mat> embeddings;
 
@@ -187,6 +195,27 @@ static const char* targetToStr(int target) {
   return "";
 }
 
+std::string receiveName() {
+  cv::namedWindow("Enter a name", cv::WINDOW_NORMAL);
+  std::string name;
+  cv::Mat canvas(50, 512, CV_8UC3, cv::Scalar());
+  for (;;) {
+    cv::imshow("Enter a name", canvas);
+    int key = cv::waitKey();
+    if (key == 13)
+      break;
+    if (key == 8) {
+      name = name.substr(0, name.size() - 1);
+    } else {
+      name += (char)key;
+    }
+    canvas.setTo(0);
+    cv::putText(canvas, name, cv::Point(0, 30), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+  }
+  cv::destroyWindow("Enter a name");
+  return name;
+}
+
 int main(int argc, char** argv) {
   // Parse command line arguments to get a path to gallery.
   cv::CommandLineParser parser(argc, argv, keys);
@@ -224,7 +253,7 @@ int main(int argc, char** argv) {
 
   cv::TickMeter timers[3];
 
-  while (cv::waitKey(1) < 0) {
+  for (;;) {
     // Capture a frame from a camera.
     cap >> frame;
     if (frame.empty())
@@ -239,6 +268,30 @@ int main(int argc, char** argv) {
       cv::Mat face = frame(box);
       emotions.push_back(er.recognize(face, timers[1]));
       names.push_back(fr.recognize(face, timers[2]));
+    }
+
+    int key = cv::waitKey(1);
+    if (key == 13) {
+      if (!boxes.empty())
+      {
+        if (boxes.size() == 1)
+        {
+          if (names[0] == "unknown")
+          {
+            std::string name = receiveName();
+            fr.add(name, frame(boxes[0]), frame, gallery);
+            std::cout << "Nice to meet you, " + name + "!" << std::endl;
+          }
+          else
+            std::cout << "Detected person is already recognized as " << names[0] << std::endl;
+        }
+        else
+          std::cout << "More than one face found on image" << std::endl;
+      }
+      else
+        std::cout << "There is no faces detected on the image" << std::endl;
+    } else if (key == 27) {
+      break;
     }
 
     for (int i = 0; i < boxes.size(); ++i) {
