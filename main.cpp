@@ -312,17 +312,20 @@ int main(int argc, char** argv) {
     logo.copyTo(frame(logoRoi), logoMask);
 
     // Put efficiency information.
-    const char* targets[] = {faceDetectorTarget.c_str(), emotionRecognizerTarget.c_str(),
-                             faceRecognizerTarget.c_str()};
-    for (int i = 0; i < 3; ++i) {
-      const char* algo = i == 0 ? "DETECTION  " : (i == 1 ? "EMOTIONS   " : "RECOGNITION");
-      std::string label = cv::format("%s (%s): %.1f FPS", algo, targets[i],
-                                     1.0 / timers[i].getTimeSec());
+    std::vector<std::tuple<char*, std::string, double> > algosData = {
+      {"DETECTION  ", faceDetectorTarget, timers[0].getTimeSec()},
+      {"EMOTIONS   ", emotionRecognizerTarget, timers[1].getTimeSec()},
+      {"RECOGNITION", faceRecognizerTarget, timers[2].getTimeSec()}
+    };
+    for (size_t i = 0; i < algosData.size(); ++i) {
+      const auto& data = algosData[i];
+      std::string label = cv::format("%s (%s): %.1f FPS", std::get<0>(data),
+                                     std::get<1>(data), 1.0 / std::get<2>(data));
 
       float fontScale = 0.001 * frame.cols;
       int baseLine;
       cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseLine);
-      cv::putText(frame, label, cv::Point(20, frame.rows - 1.5 * (3 - i) * labelSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
+      cv::putText(frame, label, cv::Point(20, frame.rows - 1.5 * (algosData.size() - i) * labelSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
     }
 
     cv::imshow(kWinName, frame);
