@@ -3,26 +3,26 @@
 #include "runners.hpp"
 
 const char* kWinName = "Intel OpenVINO toolkit";
-int fdTarget = CPU;
-int erTarget = CPU;
-int frTarget = CPU;
 
-const char* keys =
-    "{ help    h | | Print help message. }"
-    "{ gallery g | | A path to gallery with images. }";
-
-class Algorithm {
-public:
-  Algorithm(cv::Ptr<Runner> runner_) : runner(runner_) {}
-
-protected:
-  cv::Ptr<Runner> runner;
+enum Keys {
+  KEY_ESC = 27,
+  KEY_ENTER = 13,
+  KEY_BACKSPACE = 8
 };
 
+const char* keys =
+    "{ help    h |     | Print help message. }"
+    "{ gallery g |     | A path to gallery with images. }"
+    "{ camera  c |  0  | An integer id to select camera device. }"
+    "{ fd        | cpu | A target device for face detection network.}"
+    "{ er        | cpu | A target device for emotions recognition network.}"
+    "{ fr        | cpu | A target device for face recognition network.}";
+
 // This class runs a network which detects faces.
-class FaceDetector : public Algorithm {
+class FaceDetector {
 public:
-  FaceDetector() : Algorithm(new IERunner("face-detection-retail-0004", fdTarget)) {}
+  FaceDetector(const std::string& target)
+      : runner(new OCVRunner("face-detection-retail-0004", target)) {}
 
   // Returns bounding boxes around predicted faces.
   void detect(const cv::Mat& frame, std::vector<cv::Rect>& boxes, cv::TickMeter& tm,
@@ -45,23 +45,27 @@ public:
     for (int i = 0; i < numDetections; ++i) {
       float confidence = detections.at<float>(i, 2);
       // Exclude predictions with low confidence.
-      if (confidence > confThr) {
-        // Predicted bounding boxes have relative coordinates in range [0, 1].
-        int left   = std::max(0, std::min((int)(detections.at<float>(i, 3) * frame.cols), frame.cols - 1));
-        int top    = std::max(0, std::min((int)(detections.at<float>(i, 4) * frame.rows), frame.rows - 1));
-        int right  = std::max(0, std::min((int)(detections.at<float>(i, 5) * frame.cols), frame.cols - 1));
-        int bottom = std::max(0, std::min((int)(detections.at<float>(i, 6) * frame.rows), frame.rows - 1));
-        int width  = right - left + 1;
-        int height = bottom - top + 1;
-        boxes.push_back(cv::Rect(left, top, width, height));
-      }
+      if (confidence < confThr)
+          continue;
+      // Predicted bounding boxes have relative coordinates in range [0, 1].
+      int left   = std::max(0, std::min((int)(detections.at<float>(i, 3) * frame.cols), frame.cols - 1));
+      int top    = std::max(0, std::min((int)(detections.at<float>(i, 4) * frame.rows), frame.rows - 1));
+      int right  = std::max(0, std::min((int)(detections.at<float>(i, 5) * frame.cols), frame.cols - 1));
+      int bottom = std::max(0, std::min((int)(detections.at<float>(i, 6) * frame.rows), frame.rows - 1));
+      int width  = right - left + 1;
+      int height = bottom - top + 1;
+      boxes.push_back(cv::Rect(left, top, width, height));
     }
   }
+
+private:
+  std::shared_ptr<Runner> runner;
 };
 
-class EmotionsRecognizer : public Algorithm {
+class EmotionsRecognizer {
 public:
-  EmotionsRecognizer() : Algorithm(new OCVRunner("emotions-recognition-retail-0003", erTarget)) {}
+  EmotionsRecognizer(const std::string& target)
+      : runner(new OCVRunner("emotions-recognition-retail-0003", target)) {}
 
   // Returns a string with face's emotion.
   std::string recognize(const cv::Mat& faceImg, cv::TickMeter& tm) {
@@ -79,44 +83,45 @@ public:
     double maxConf;
     cv::Point maxLoc;
     minMaxLoc(confidences, 0, &maxConf, 0, &maxLoc);
-    if (maxLoc.x == 0) return "neutral";
-    else if (maxLoc.x == 1) return "happy";
-    else if (maxLoc.x == 2) return "sad";
-    else if (maxLoc.x == 3) return "surprised";
-    else return "angry";
+
+    static std::string emotions[] = {"neutral", "happy", "sad", "surprised", "angry"};
+    return emotions[maxLoc.x];
   }
+
+private:
+  std::shared_ptr<Runner> runner;
 };
 
 // NOTE: do not run this model using OCVRunner due a bug in R3 release
 //       (will be fixed in the future releases)
-class FaceRecognition : public Algorithm {
+class FaceRecognition {
 public:
-  FaceRecognition(const std::string& gallery, FaceDetector& fd)
-      : Algorithm(new IERunner("face-reidentification-retail-0001", frTarget)) {
+  FaceRecognition(const std::string& gallery, FaceDetector& fd, const std::string& target)
+      : runner(new IERunner("face-reidentification-retail-0001", target)) {
+    if (!cv::utils::fs::isDirectory(gallery))
+        return;
+
     cv::TickMeter tm;
-    if (cv::utils::fs::isDirectory(gallery))
-    {
-      // Get all the images from gallery.
-      std::vector<cv::String> images;
-      cv::utils::fs::glob_relative(gallery, "", images, false, true);
-      for (const std::string& imgName : images) {
-        std::string imgPath = cv::utils::fs::join(gallery, imgName);
-        std::string personName = imgName.substr(0, imgName.rfind('.'));
-        cv::Mat img = cv::imread(imgPath);
+    // Get all the images from gallery.
+    std::vector<cv::String> images;
+    cv::utils::fs::glob_relative(gallery, "", images, false, true);
+    for (const std::string& imgName : images) {
+      std::string imgPath = cv::utils::fs::join(gallery, imgName);
+      std::string personName = imgName.substr(0, imgName.rfind('.'));
+      cv::Mat img = cv::imread(imgPath);
 
-        // Detect a face on image.
-        std::vector<cv::Rect> boxes;
-        fd.detect(img, boxes, tm);
+      // Detect a face on image.
+      std::vector<cv::Rect> boxes;
+      fd.detect(img, boxes, tm);
 
-        if (boxes.empty())
-            CV_Error(cv::Error::StsAssert, "There is no face found on image " + imgName);
-        if (boxes.size() > 1)
-            CV_Error(cv::Error::StsAssert, "More than one face found on image " + imgName);
+      if (boxes.empty())
+          CV_Error(cv::Error::StsAssert, "There is no face found on image " + imgName);
+      if (boxes.size() > 1)
+          CV_Error(cv::Error::StsAssert, "More than one face found on image " + imgName);
 
-        cv::Mat face = img(boxes[0]);
-        cv::Mat embedding = getEmbedding(face, tm);
-        embeddings[personName] = embedding;
-      }
+      cv::Mat face = img(boxes[0]);
+      cv::Mat embedding = getEmbedding(face, tm);
+      embeddings[personName] = embedding;
     }
     std::cout << "Number of registered persons: " << embeddings.size() << std::endl;
   }
@@ -127,7 +132,7 @@ public:
   std::string recognize(const cv::Mat& faceImg, cv::TickMeter& tm, float scoreThr = 0.5) {
     cv::Mat embedding = getEmbedding(faceImg, tm);
     std::string bestMatchName = "unknown";
-    for (auto& it : embeddings) {
+    for (const auto& it : embeddings) {
       float score = embedding.dot(it.second);
       if (score > scoreThr) {
         bestMatchName = it.first;
@@ -146,6 +151,7 @@ public:
   }
 
 private:
+  std::shared_ptr<Runner> runner;
   std::map<std::string, cv::Mat> embeddings;
 
   // Returns an embedding vector of 128 floating point values.
@@ -187,14 +193,6 @@ static void drawBox(cv::Mat& frame, const cv::Rect& box, int& thickness) {
   }
 }
 
-static const char* targetToStr(int target) {
-  if (target == CPU) return "CPU";
-  if (target == GPU_FP32) return "GPU, FP32";
-  if (target == GPU_FP16) return "GPU, FP16";
-  if (target == MYRIAD) return "VPU";
-  return "";
-}
-
 std::string receiveName() {
   cv::namedWindow("Enter a name", cv::WINDOW_NORMAL);
   std::string name;
@@ -202,9 +200,9 @@ std::string receiveName() {
   for (;;) {
     cv::imshow("Enter a name", canvas);
     int key = cv::waitKey();
-    if (key == 13)
+    if (key == KEY_ENTER)
       break;
-    if (key == 8) {
+    if (key == KEY_BACKSPACE) {
       name = name.substr(0, name.size() - 1);
     } else {
       name += (char)key;
@@ -219,7 +217,7 @@ std::string receiveName() {
 int main(int argc, char** argv) {
   // Parse command line arguments to get a path to gallery.
   cv::CommandLineParser parser(argc, argv, keys);
-  parser.about("Intel OpenVINO demonstration application.");
+  parser.about("Intel OpenVINO demonstration application. Available devices: (cpu, gpu_fp32, gpu_fp16, myriad)");
   if (parser.has("help"))
   {
       parser.printMessage();
@@ -227,13 +225,17 @@ int main(int argc, char** argv) {
   }
 
   std::string gallery = parser.get<std::string>("gallery");
+  int camera = parser.get<int>("camera");
+  std::string faceDetectorTarget = parser.get<std::string>("fd");
+  std::string emotionRecognizerTarget = parser.get<std::string>("er");
+  std::string faceRecognizerTarget = parser.get<std::string>("fr");
 
-  cv::VideoCapture cap(0);
+  cv::VideoCapture cap(camera);
   cv::Mat frame;
 
-  FaceDetector fd;
-  EmotionsRecognizer er;
-  FaceRecognition fr(gallery, fd);
+  FaceDetector faceDetector(faceDetectorTarget);
+  EmotionsRecognizer emotionRecognizer(emotionRecognizerTarget);
+  FaceRecognition faceRecognizer(gallery, faceDetector, faceRecognizerTarget);
 
   cv::namedWindow(kWinName, cv::WINDOW_NORMAL);
 
@@ -260,37 +262,30 @@ int main(int argc, char** argv) {
       break;
 
     std::vector<cv::Rect> boxes;
-    fd.detect(frame, boxes, timers[0]);
+    faceDetector.detect(frame, boxes, timers[0]);
 
     std::vector<std::string> emotions;
     std::vector<std::string> names;
-    for (auto& box : boxes) {
+    for (const auto& box : boxes) {
       cv::Mat face = frame(box);
-      emotions.push_back(er.recognize(face, timers[1]));
-      names.push_back(fr.recognize(face, timers[2]));
+      emotions.push_back(emotionRecognizer.recognize(face, timers[1]));
+      names.push_back(faceRecognizer.recognize(face, timers[2]));
     }
 
     int key = cv::waitKey(1);
-    if (key == 13) {
-      if (!boxes.empty())
-      {
-        if (boxes.size() == 1)
-        {
-          if (names[0] == "unknown")
-          {
-            std::string name = receiveName();
-            fr.add(name, frame(boxes[0]), frame, gallery);
-            std::cout << "Nice to meet you, " + name + "!" << std::endl;
-          }
-          else
-            std::cout << "Detected person is already recognized as " << names[0] << std::endl;
-        }
-        else
-          std::cout << "More than one face found on image" << std::endl;
-      }
-      else
+    if (key == KEY_ENTER) {
+      if (boxes.empty())
         std::cout << "There is no faces detected on the image" << std::endl;
-    } else if (key == 27) {
+      else if (boxes.size() > 1)
+        std::cout << "More than one face found on image" << std::endl;
+      else if (names[0] != "unknown")
+        std::cout << "Detected person is already recognized as " << names[0] << std::endl;
+      else {
+        std::string name = receiveName();
+        faceRecognizer.add(name, frame(boxes[0]), frame, gallery);
+        std::cout << "Nice to meet you, " + name + "!" << std::endl;
+      }
+    } else if (key == KEY_ESC) {
       break;
     }
 
@@ -317,16 +312,20 @@ int main(int argc, char** argv) {
     logo.copyTo(frame(logoRoi), logoMask);
 
     // Put efficiency information.
-    int targets[] = {fdTarget, erTarget, frTarget};
-    for (int i = 0; i < 3; ++i) {
-      const char* algo = i == 0 ? "DETECTION  " : (i == 1 ? "EMOTIONS   " : "RECOGNITION");
-      std::string label = cv::format("%s (%s): %.1f FPS", algo, targetToStr(targets[i]),
-                                     1.0 / timers[i].getTimeSec());
+    std::vector<std::tuple<char*, std::string, double> > algosData = {
+      {"DETECTION  ", faceDetectorTarget, timers[0].getTimeSec()},
+      {"EMOTIONS   ", emotionRecognizerTarget, timers[1].getTimeSec()},
+      {"RECOGNITION", faceRecognizerTarget, timers[2].getTimeSec()}
+    };
+    for (size_t i = 0; i < algosData.size(); ++i) {
+      const auto& data = algosData[i];
+      std::string label = cv::format("%s (%s): %.1f FPS", std::get<0>(data),
+                                     std::get<1>(data), 1.0 / std::get<2>(data));
 
       float fontScale = 0.001 * frame.cols;
       int baseLine;
       cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseLine);
-      cv::putText(frame, label, cv::Point(20, frame.rows - 1.5 * (3 - i) * labelSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
+      cv::putText(frame, label, cv::Point(20, frame.rows - 1.5 * (algosData.size() - i) * labelSize.height), cv::FONT_HERSHEY_SIMPLEX, fontScale, cv::Scalar(0, 255, 0), 2);
     }
 
     cv::imshow(kWinName, frame);

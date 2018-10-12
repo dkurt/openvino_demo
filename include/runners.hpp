@@ -3,13 +3,18 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utils/filesystem.hpp>
 
-enum Target { CPU = 0, GPU_FP32, GPU_FP16, MYRIAD };
-
 class Runner {
 public:
-  Runner(const std::string& modelName, int target)
+  Runner(const std::string& modelName, std::string target)
   {
-    std::string precision = (target == GPU_FP16 || target == MYRIAD) ? "FP16" : "FP32";
+    std::transform(target.begin(), target.end(), target.begin(), ::toupper);
+    size_t delim = target.find('_');
+    device = target.substr(0, delim);
+    if (delim != std::string::npos)
+        precision = target.substr(delim + 1);
+    else
+        precision = target == "MYRIAD" ? "FP16" : "FP32";
+
     std::string prefix = cv::utils::fs::join(getenv("INTEL_CVSDK_DIR"),
                          cv::utils::fs::join("deployment_tools",
                          cv::utils::fs::join("intel_models",
@@ -22,14 +27,13 @@ public:
   virtual void run(const cv::Mat& input, cv::Mat& output, cv::TickMeter& tm) = 0;
 
 protected:
-  std::string xmlPath;
-  std::string binPath;
+  std::string xmlPath, binPath, device, precision;
 };
 
 // Intel's Inference Engine runner.
 class IERunner : public Runner {
 public:
-  IERunner(const std::string& modelName, int target);
+  IERunner(const std::string& modelName, const std::string& target);
 
   virtual void run(const cv::Mat& input, cv::Mat& output, cv::TickMeter& tm);
 
@@ -42,7 +46,7 @@ private:
 // OpenCV runner.
 class OCVRunner : public Runner {
 public:
-  OCVRunner(const std::string& modelName, int target);
+  OCVRunner(const std::string& modelName, const std::string& target);
 
   virtual void run(const cv::Mat& input, cv::Mat& output, cv::TickMeter& tm);
 
