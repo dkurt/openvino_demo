@@ -97,7 +97,7 @@ private:
 class FaceRecognition {
 public:
   FaceRecognition(const std::string& gallery, FaceDetector& fd, const std::string& target)
-      : runner(new IERunner("face-reidentification-retail-0001", target)) {
+      : runner(new IERunner("face-reidentification-retail-0071", target)) {
     if (!cv::utils::fs::isDirectory(gallery))
         return;
 
@@ -231,6 +231,8 @@ int main(int argc, char** argv) {
   std::string faceRecognizerTarget = parser.get<std::string>("fr");
 
   cv::VideoCapture cap(camera);
+  cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+  cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
   cv::Mat frame;
 
   FaceDetector faceDetector(faceDetectorTarget);
@@ -253,8 +255,9 @@ int main(int argc, char** argv) {
   cv::inRange(logo, cv::Scalar(), cv::Scalar(), logoMask);
   logoMask = ~logoMask;
 
-  cv::TickMeter timers[3];
-
+  std::vector<cv::TickMeter> timers(3);
+  std::vector<std::queue<double> > perfStatsCollection(3);
+  std::vector<double> accumulatedTimes(3);
   for (;;) {
     // Capture a frame from a camera.
     cap >> frame;
@@ -312,10 +315,22 @@ int main(int argc, char** argv) {
     logo.copyTo(frame(logoRoi), logoMask);
 
     // Put efficiency information.
+    for (int i = 0; i < timers.size(); ++i) {
+      double sec = timers[i].getTimeSec();
+      perfStatsCollection[i].push(sec);
+      accumulatedTimes[i] += sec;
+    }
+    if (perfStatsCollection[0].size() > 100) {
+      for (int i = 0; i < perfStatsCollection.size(); ++i) {
+        perfStatsCollection[i].pop();
+        accumulatedTimes[i] -= perfStatsCollection[i].front();
+      }
+    }
+
     std::vector<std::tuple<char*, std::string, double> > algosData = {
-      {"DETECTION  ", faceDetectorTarget, timers[0].getTimeSec()},
-      {"EMOTIONS   ", emotionRecognizerTarget, timers[1].getTimeSec()},
-      {"RECOGNITION", faceRecognizerTarget, timers[2].getTimeSec()}
+      {"DETECTION  ", faceDetectorTarget, accumulatedTimes[0] / perfStatsCollection[0].size()},
+      {"EMOTIONS   ", emotionRecognizerTarget, accumulatedTimes[1] / perfStatsCollection[1].size()},
+      {"RECOGNITION", faceRecognizerTarget, accumulatedTimes[2] / perfStatsCollection[2].size()}
     };
     for (size_t i = 0; i < algosData.size(); ++i) {
       const auto& data = algosData[i];
